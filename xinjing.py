@@ -126,13 +126,14 @@ class BJNewsCrawler:
 
             logger.info(f"尝试导航到日期: {year}-{month:02d}-{day:02d}")
             calendar_xpath = "/html/body/div[3]/div/div[2]/div/div[2]/div[2]/div[2]/div/div/div[3]/div[2]"
+                           # "/html/body/div[3]/div/div[2]/div/div[2]/div[2]/div[2]/div/div/div[3]/div[2]"
             try:
                 # 等待日历加载
                 calendar = self.wait.until(
                     EC.presence_of_element_located((By.XPATH, calendar_xpath))
                 )
 
-                # 查找所有日期链接
+                # 查找所有日期链接（有问题）
                 date_links = calendar.find_elements(By.XPATH, "//*[@id='calendar-1']/div[3]/div[2]/div[2]/span/a")
 
                 for link in date_links:
@@ -148,7 +149,7 @@ class BJNewsCrawler:
                 logger.warning(f"未找到日期 {day}，尝试其他方法")
 
                 # 尝试直接通过XPath定位
-                day_xpath = f"{calendar_xpath}/div[{day + 2}]/span/a"
+                day_xpath = f"{calendar_xpath}/div[{day + 1}]/span/a"
                 try:
                     day_element = self.driver.find_element(By.XPATH, day_xpath)
                     self._safe_click(day_element)
@@ -446,7 +447,7 @@ class BJNewsCrawler:
                 f.write(f"标题: {article.title}\n")
                 f.write(f"版面: {article.edition}\n")
                 f.write(f"日期: {article.date}\n")
-                f.write(f"{'=' * 50}\n")
+                # f.write(f"{'=' * 50}\n")
                 f.write(f"内容:\n{article.content}\n")
 
             logger.debug(f"    保存成功: {filename}")
@@ -522,20 +523,20 @@ class BJNewsCrawler:
             logger.info(f"  - 平均速度: {total_articles / success_days:.1f} 篇/天")
         logger.info(f"{'#' * 60}\n")
 
-    # def crawl_specific_date(self, date_str: str):
-    #     """
-    #     爬取特定日期（用于测试）
-    #     :param date_str: 日期字符串 YYYYMMDD
-    #     """
-    #     logger.info(f"\n测试爬取日期: {date_str}")
-    #
-    #     self._init_driver(headless=False)
-    #
-    #     try:
-    #         count = self.crawl_date_with_click(date_str)
-    #         logger.info(f"完成: {count} 篇文章")
-    #     except Exception as e:
-    #         logger.error(f"失败: {e}")
+    def crawl_specific_date(self, date_str: str):
+        """
+        爬取特定日期（用于测试）
+        :param date_str: 日期字符串 YYYYMMDD
+        """
+        logger.info(f"\n测试爬取日期: {date_str}")
+
+        self._init_driver(headless=False)
+
+        try:
+            count = self.crawl_date_with_click(date_str)
+            logger.info(f"完成: {count} 篇文章")
+        except Exception as e:
+            logger.error(f"失败: {e}")
 
     def __del__(self):
         if hasattr(self, 'driver') and self.driver:
