@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
@@ -35,8 +35,8 @@ class Article:
 
 
 class BJNewsCrawler:
-
     BASE_URL = 'https://epaper.bjnews.com.cn/'
+
     def __init__(self, output_dir: str = './bjnews_data'):
         self.output_dir = output_dir
         self.driver = None
@@ -95,7 +95,7 @@ class BJNewsCrawler:
         logger.info("WebDriver初始化成功")
 
     def _safe_click(self, element, use_js=False):
-        # 最后一招 javascript点击
+        # 安全点击元素
         try:
             if use_js:
                 self.driver.execute_script("arguments[0].click();", element)
@@ -126,14 +126,14 @@ class BJNewsCrawler:
 
             logger.info(f"尝试导航到日期: {year}-{month:02d}-{day:02d}")
             calendar_xpath = "/html/body/div[3]/div/div[2]/div/div[2]/div[2]/div[2]/div/div/div[3]/div[2]"
-                           # "/html/body/div[3]/div/div[2]/div/div[2]/div[2]/div[2]/div/div/div[3]/div[2]"
+
             try:
                 # 等待日历加载
                 calendar = self.wait.until(
                     EC.presence_of_element_located((By.XPATH, calendar_xpath))
                 )
 
-                # 查找所有日期链接（有问题）
+                # 查找所有日期链接
                 date_links = calendar.find_elements(By.XPATH, "//*[@id='calendar-1']/div[3]/div[2]/div[2]/span/a")
 
                 for link in date_links:
@@ -216,29 +216,6 @@ class BJNewsCrawler:
             logger.error(f"点击版面失败: {e}")
             return False
 
-    # def click_edition(self, edition_code: str) -> bool:
-    #     # selenium点击指定版面
-    #     try:
-    #         edition_list_xpath = "/html/body/div[3]/div/div[2]/div/div[1]/div/div[1]/div[2]/ul"
-    #         edition_ul = self.wait.until(
-    #             EC.presence_of_element_located((By.XPATH, edition_list_xpath))
-    #         )
-    #         edition_links = edition_ul.find_elements(By.TAG_NAME, "a")
-    #
-    #         for link in edition_links:
-    #             if edition_code in link.text:
-    #                 logger.info(f"点击版面 {edition_code}")
-    #                 self._safe_click(link)
-    #                 time.sleep(2)
-    #                 return True
-    #
-    #         logger.warning(f"未找到版面 {edition_code}")
-    #         return False
-    #
-    #     except Exception as e:
-    #         logger.error(f"点击版面失败: {e}")
-    #         return False
-
     def get_article_links_in_edition(self) -> List[Dict]:
         # 获取当前版面的所有文章链接
         articles = []
@@ -259,15 +236,12 @@ class BJNewsCrawler:
                     # 获取链接的全部HTML内容，然后处理<br>标签
                     title_html = link.get_attribute('innerHTML')
 
-                    #将<br>替换为空格
+                    # 将<br>替换为空格
                     title = re.sub(r'<br\s*/?>', ' ', title_html)
                     title = re.sub(r'<[^>]+>', '', title)
                     title = ' '.join(title.split())
                     title = title.strip()
-                    # 直接获取text但处理换行符
-                    # title = link.text.strip()
-                    # title = title.replace('\n', ' ').replace('\r', ' ')
-                    # title = ' '.join(title.split())  # 清理多余空格
+
                     if title:
                         articles.append({
                             'index': idx,
@@ -308,6 +282,7 @@ class BJNewsCrawler:
             except Exception as e:
                 logger.debug(f"    标题提取异常: {e}")
                 pass
+
             # 提取正文
             content = ""
             try:
@@ -332,9 +307,47 @@ class BJNewsCrawler:
             logger.error(f"提取文章内容失败: {e}")
             return None
 
+    def generate_filename(self, title: str, date_str: str, edition: str, article_num: int) -> str:
+        # 生成文件名（不包含路径）
+        safe_title = title.replace('\n', ' ').replace('\r', ' ')
+        # 移除Windows文件名非法字符
+        safe_title = re.sub(r'[\\/*?:"<>|]', '', safe_title)
+        # 清理多余空格
+        safe_title = ' '.join(safe_title.split())
+        safe_title = safe_title[:50]
+        # 文件名
+        filename = f"{date_str}_{article_num:03d}_{edition}_{safe_title}.txt"
+        return filename
+
+    def check_article_exists(self, title: str, date_str: str, edition: str, article_num: int) -> bool:
+        #检查文章文件是否已存在
+        year = date_str[:4]
+        month = date_str[4:6]
+        day = date_str[6:8]
+        month_dir = os.path.join(self.output_dir, f"{year}-{month}")
+        day_dir = os.path.join(month_dir, day)
+
+        # 生成预期的文件名
+        filename = self.generate_filename(title, date_str, edition, article_num)
+        filepath = os.path.join(day_dir, filename)
+
+        # 检查主文件名
+        if os.path.exists(filepath):
+            return True
+
+        # 检查备用文件名
+        safe_filename = f"{date_str}_{article_num:03d}_{edition}_article.txt"
+        safe_filepath = os.path.join(day_dir, safe_filename)
+        if os.path.exists(safe_filepath):
+            return True
+
+        return False
+
     def crawl_date_with_click(self, date_str: str) -> int:
         # Selenium爬取指定日期的所有文章
         total_articles = 0
+        actual_saved = 0  # 实际保存的文章数
+        skipped_articles = 0  # 跳过的文章数
 
         logger.info(f"\n{'=' * 60}")
         logger.info(f"开始爬取日期: {date_str}")
@@ -354,7 +367,6 @@ class BJNewsCrawler:
 
                 # 如果不是第一个版面，需要点击对应版面
                 if edition_idx > 0:
-                    # 直接点击版面列表中的对应版面
                     if not self.click_edition_by_index(edition_idx):
                         logger.error(f"无法切换到版面 {edition_code}")
                         continue
@@ -365,11 +377,26 @@ class BJNewsCrawler:
                 articles = self.get_article_links_in_edition()
 
                 edition_articles = 0
+                edition_skipped = 0
 
                 # 处理每篇文章
                 for article_info in articles:
+                    total_articles += 1
+
+                    # 先检查文章是否已存在
+                    if self.check_article_exists(
+                            article_info['title'],
+                            date_str,
+                            edition_code,
+                            total_articles
+                    ):
+                        logger.info(f"  文章已存在，跳过: {article_info['title'][:30]}...")
+                        skipped_articles += 1
+                        edition_skipped += 1
+                        continue
+
                     try:
-                        # 点击文章链接
+                        # 文章不存在，进行爬取
                         logger.debug(f"  点击文章 {article_info['index']}: {article_info['title'][:30]}...")
                         self._safe_click(article_info['element'])
                         time.sleep(1.5)
@@ -383,11 +410,11 @@ class BJNewsCrawler:
                             article.edition = edition_code
 
                             # 保存文章
-                            total_articles += 1
-                            edition_articles += 1
-                            self.save_article(article, total_articles)
-
-                            logger.debug(f"    成功提取: {article.title[:30]}...")
+                            saved = self.save_article(article, total_articles)
+                            if saved:
+                                actual_saved += 1
+                                edition_articles += 1
+                                logger.debug(f"    成功提取并保存: {article.title[:30]}...")
 
                         # 返回版面页
                         self.driver.back()
@@ -407,22 +434,22 @@ class BJNewsCrawler:
                             self.driver.back()
                             time.sleep(1)
                         except:
-
                             self.navigate_to_date(date_str)
                             self.click_edition_by_index(edition_idx)
 
-                logger.info(f"  版面 {edition_code} 完成: {edition_articles} 篇")
+                logger.info(f"  版面 {edition_code} 完成: 新保存 {edition_articles} 篇，跳过 {edition_skipped} 篇")
 
         except Exception as e:
             logger.error(f"爬取日期 {date_str} 失败: {e}")
 
-        logger.info(f"日期 {date_str} 完成: 共 {total_articles} 篇文章\n")
-        return total_articles
+        logger.info(
+            f"日期 {date_str} 完成: 共 {total_articles} 篇文章，新保存 {actual_saved} 篇，跳过 {skipped_articles} 篇\n")
+        return actual_saved
 
-    def save_article(self, article: Article, article_num: int):
-        # 保存文章
+    def save_article(self, article: Article, article_num: int) -> bool:
+        # 保存文章，如果文件已存在则跳过
         if not article.date:
-            return
+            return False
 
         year = article.date[:4]
         month = article.date[4:6]
@@ -431,15 +458,13 @@ class BJNewsCrawler:
         day_dir = os.path.join(month_dir, day)
         os.makedirs(day_dir, exist_ok=True)
 
-        safe_title = article.title.replace('\n', ' ').replace('\r', ' ')
-        # 移除Windows文件名非法字符
-        safe_title = re.sub(r'[\\/*?:"<>|]', '', safe_title)
-        # 清理多余空格
-        safe_title = ' '.join(safe_title.split())
-        safe_title = safe_title[:50]
-        # 文件名
-        filename = f"{article.date}_{article_num:03d}_{article.edition}_{safe_title}.txt"
+        filename = self.generate_filename(article.title, article.date, article.edition, article_num)
         filepath = os.path.join(day_dir, filename)
+
+        # 检查文件是否存在
+        if os.path.exists(filepath):
+            logger.info(f"文件已存在，跳过保存: {filename}")
+            return False
 
         # 保存
         try:
@@ -447,27 +472,48 @@ class BJNewsCrawler:
                 f.write(f"标题: {article.title}\n")
                 f.write(f"版面: {article.edition}\n")
                 f.write(f"日期: {article.date}\n")
-                # f.write(f"{'=' * 50}\n")
                 f.write(f"内容:\n{article.content}\n")
 
             logger.debug(f"    保存成功: {filename}")
+            return True
         except Exception as e:
             logger.error(f"保存失败: {e}")
-            try:
-                # 测试方案
-                safe_filename = f"{article.date}_{article_num:03d}_{article.edition}_article.txt"
-                safe_filepath = os.path.join(day_dir, safe_filename)
+            # 尝试备用文件名
+            safe_filename = f"{article.date}_{article_num:03d}_{article.edition}_article.txt"
+            safe_filepath = os.path.join(day_dir, safe_filename)
 
+            # 检查备用文件是否存在
+            if os.path.exists(safe_filepath):
+                logger.info(f"备用文件已存在，跳过保存: {safe_filename}")
+                return False
+
+            try:
                 with open(safe_filepath, 'w', encoding='utf-8') as f:
                     f.write(f"标题: {article.title}\n")
                     f.write(f"版面: {article.edition}\n")
                     f.write(f"日期: {article.date}\n")
-                    f.write(f"{'=' * 50}\n")
                     f.write(f"内容:\n{article.content}\n")
 
                 logger.debug(f"    使用备用文件名保存成功: {safe_filename}")
+                return True
             except Exception as e2:
                 logger.error(f"备用保存也失败: {e2}")
+                return False
+
+    def is_weekend(self, date_str: str) -> bool:
+        # 判断日期是否为周末（周六或周日）
+        year = int(date_str[:4])
+        month = int(date_str[4:6])
+        day = int(date_str[6:8])
+
+        date_obj = datetime(year, month, day)
+        # weekday() 返回 0-6，其中 5=周六，6=周日
+        weekday = date_obj.weekday()
+
+        if weekday in [5, 6]:  # 周六或周日
+            weekday_name = "周六" if weekday == 5 else "周日"
+            return True, weekday_name
+        return False, None
 
     def crawl_current_month(self):
         # 爬取当前月份从1号到今天的所有文章
@@ -481,26 +527,38 @@ class BJNewsCrawler:
         logger.info(f"\n{'#' * 60}")
         logger.info(f"开始爬取 {current_year}年{current_month}月 的新京报")
         logger.info(f"日期范围: 1日 到 {current_day}日")
+        logger.info(f"注意：周六周日报纸不发行，将自动跳过")
         logger.info(f"{'#' * 60}\n")
 
         # 初始化
         self._init_driver(headless=False)
 
-        total_articles = 0
+        total_saved = 0
+        total_skipped = 0
         success_days = 0
+        weekend_days = 0
         failed_dates = []
+        weekend_dates = []
 
         # 按天爬取
         for day in range(1, current_day + 1):
             date_str = f"{current_year}{current_month:02d}{day:02d}"
 
+            # 检查是否为周末
+            is_weekend_day, weekday_name = self.is_weekend(date_str)
+            if is_weekend_day:
+                logger.info(f"跳过 {date_str} ({weekday_name}，报纸不发行)")
+                weekend_days += 1
+                weekend_dates.append(f"{date_str}({weekday_name})")
+                continue
+
             try:
                 # 爬取这天的所有版面
-                count = self.crawl_date_with_click(date_str)
+                saved_count = self.crawl_date_with_click(date_str)
 
-                if count > 0:
+                if saved_count >= 0:  # 即使没有新保存的文章，也算成功
                     success_days += 1
-                    total_articles += count
+                    total_saved += saved_count
                 else:
                     failed_dates.append(date_str)
 
@@ -514,29 +572,100 @@ class BJNewsCrawler:
         logger.info(f"\n{'#' * 60}")
         logger.info(f"爬取完成统计:")
         logger.info(f"  - 总天数: {current_day}")
-        logger.info(f"  - 成功天数: {success_days}")
+        logger.info(f"  - 工作日: {current_day - weekend_days}")
+        logger.info(f"  - 周末天数: {weekend_days}")
+        logger.info(f"  - 成功爬取天数: {success_days}")
         logger.info(f"  - 失败天数: {len(failed_dates)}")
+        if weekend_dates:
+            logger.info(f"  - 跳过的周末: {', '.join(weekend_dates[:5])}{'...' if len(weekend_dates) > 5 else ''}")
         if failed_dates:
             logger.info(f"  - 失败日期: {', '.join(failed_dates)}")
-        logger.info(f"  - 总文章数: {total_articles}")
+        logger.info(f"  - 新保存文章数: {total_saved}")
         if success_days > 0:
-            logger.info(f"  - 平均速度: {total_articles / success_days:.1f} 篇/天")
+            logger.info(f"  - 平均速度: {total_saved / success_days:.1f} 篇/天")
         logger.info(f"{'#' * 60}\n")
 
     def crawl_specific_date(self, date_str: str):
-        """
-        爬取特定日期（用于测试）
-        :param date_str: 日期字符串 YYYYMMDD
-        """
+        # 爬取特定日期（用于测试）
         logger.info(f"\n测试爬取日期: {date_str}")
+
+        # 检查是否为周末
+        is_weekend_day, weekday_name = self.is_weekend(date_str)
+        if is_weekend_day:
+            logger.warning(f"日期 {date_str} 是{weekday_name}，新京报不发行")
+            user_input = input("是否仍要尝试爬取？(y/n): ")
+            if user_input.lower() != 'y':
+                logger.info("跳过周末爬取")
+                return
 
         self._init_driver(headless=False)
 
         try:
             count = self.crawl_date_with_click(date_str)
-            logger.info(f"完成: {count} 篇文章")
+            logger.info(f"完成: 新保存 {count} 篇文章")
         except Exception as e:
             logger.error(f"失败: {e}")
+
+    def crawl_date_range(self, start_date: str, end_date: str, skip_weekends: bool = True):
+        # 爬取指定日期范围内的所有报纸
+        from datetime import timedelta
+
+        start = datetime.strptime(start_date, "%Y%m%d")
+        end = datetime.strptime(end_date, "%Y%m%d")
+
+        logger.info(f"\n{'#' * 60}")
+        logger.info(f"开始爬取日期范围: {start_date} 至 {end_date}")
+        if skip_weekends:
+            logger.info(f"注意：将自动跳过周六周日")
+        logger.info(f"{'#' * 60}\n")
+
+        # 初始化
+        self._init_driver(headless=False)
+
+        total_saved = 0
+        success_days = 0
+        weekend_days = 0
+        failed_dates = []
+
+        current = start
+        while current <= end:
+            date_str = current.strftime("%Y%m%d")
+
+            # 检查是否为周末
+            if skip_weekends:
+                is_weekend_day, weekday_name = self.is_weekend(date_str)
+                if is_weekend_day:
+                    logger.info(f"跳过 {date_str} ({weekday_name})")
+                    weekend_days += 1
+                    current += timedelta(days=1)
+                    continue
+
+            try:
+                saved_count = self.crawl_date_with_click(date_str)
+                if saved_count >= 0:
+                    success_days += 1
+                    total_saved += saved_count
+                else:
+                    failed_dates.append(date_str)
+            except Exception as e:
+                logger.error(f"爬取日期 {date_str} 失败: {e}")
+                failed_dates.append(date_str)
+
+            current += timedelta(days=1)
+            time.sleep(2)
+
+        # 统计
+        total_days = (end - start).days + 1
+        logger.info(f"\n{'#' * 60}")
+        logger.info(f"爬取完成统计:")
+        logger.info(f"  - 日期范围天数: {total_days}")
+        logger.info(f"  - 跳过周末天数: {weekend_days}")
+        logger.info(f"  - 实际爬取天数: {success_days}")
+        logger.info(f"  - 失败天数: {len(failed_dates)}")
+        logger.info(f"  - 新保存文章数: {total_saved}")
+        if success_days > 0:
+            logger.info(f"  - 平均速度: {total_saved / success_days:.1f} 篇/天")
+        logger.info(f"{'#' * 60}\n")
 
     def __del__(self):
         if hasattr(self, 'driver') and self.driver:
@@ -553,9 +682,19 @@ def main():
     crawler = BJNewsCrawler(output_dir=output_directory)
 
     try:
-        # 测试单天
-        # crawler.crawl_specific_date("20250901")
+        # 多种使用方式示例：
+
+        # 1. 爬取当前月份（自动跳过周末）
         crawler.crawl_current_month()
+
+        # 2. 爬取特定日期（会提示是否为周末）
+        # crawler.crawl_specific_date("20250104")  # 周六
+
+        # 3. 爬取指定日期范围（自动跳过周末）
+        # crawler.crawl_date_range("20250101", "20250110", skip_weekends=True)
+
+        # 4. 爬取指定日期范围（包含周末，用于特殊情况）
+        # crawler.crawl_date_range("20250101", "20250110", skip_weekends=False)
 
     except KeyboardInterrupt:
         logger.info("\n用户中断")
