@@ -10,6 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
 from selenium.webdriver.common.action_chains import ActionChains
 import logging
@@ -113,8 +114,33 @@ class BJNewsCrawler:
             logger.error(f"点击失败: {e}")
             return False
 
+    def select_month(self, month: int) -> bool:
+        """选择指定月份"""
+        try:
+            # 月份选择器的XPath
+            month_selector_xpath = "/html/body/div[3]/div/div[2]/div/div[2]/div[2]/div[2]/div/div/div[1]/div/div[2]/select"
+
+            # 等待月份选择器加载
+            month_select_element = self.wait.until(
+                EC.presence_of_element_located((By.XPATH, month_selector_xpath))
+            )
+
+            # 使用Select类来操作下拉框
+            select = Select(month_select_element)
+
+            # 选择对应的月份（value通常是月份数字的字符串）
+            select.select_by_value(str(month))
+
+            logger.info(f"成功选择月份: {month}月")
+            time.sleep(2)  # 等待页面更新
+            return True
+
+        except Exception as e:
+            logger.error(f"选择月份失败: {e}")
+            return False
+
     def navigate_to_date(self, date_str: str) -> bool:
-        # 导航到指定日期
+        """导航到指定日期，增强版支持跨月导航"""
         try:
             self.driver.get(self.BASE_URL)
             time.sleep(3)  # 等待页面加载
@@ -125,6 +151,13 @@ class BJNewsCrawler:
             day = int(date_str[6:8])
 
             logger.info(f"尝试导航到日期: {year}-{month:02d}-{day:02d}")
+
+            # 首先选择正确的月份
+            if not self.select_month(month):
+                logger.error(f"无法选择月份 {month}")
+                return False
+
+            # 然后选择日期
             calendar_xpath = "/html/body/div[3]/div/div[2]/div/div[2]/div[2]/div[2]/div/div/div[3]/div[2]"
 
             try:
@@ -134,7 +167,7 @@ class BJNewsCrawler:
                 )
 
                 # 查找所有日期链接
-                date_links = calendar.find_elements(By.XPATH, "//*[@id='calendar-1']/div[3]/div[2]/div[2]/span/a")
+                date_links = calendar.find_elements(By.XPATH, ".//span/a")
 
                 for link in date_links:
                     link_text = link.text.strip()
@@ -320,7 +353,7 @@ class BJNewsCrawler:
         return filename
 
     def check_article_exists(self, title: str, date_str: str, edition: str, article_num: int) -> bool:
-        #检查文章文件是否已存在
+        # 检查文章文件是否已存在
         year = date_str[:4]
         month = date_str[4:6]
         day = date_str[6:8]
@@ -500,7 +533,7 @@ class BJNewsCrawler:
                 logger.error(f"备用保存也失败: {e2}")
                 return False
 
-    def is_weekend(self, date_str: str) -> bool:
+    def is_weekend(self, date_str: str) -> tuple:
         # 判断日期是否为周末（周六或周日）
         year = int(date_str[:4])
         month = int(date_str[4:6])
@@ -515,9 +548,117 @@ class BJNewsCrawler:
             return True, weekday_name
         return False, None
 
-    def crawl_current_month(self):
-        # 爬取当前月份从1号到今天的所有文章
+    def crawl_selected_month(self):
+        """让用户选择并爬取2025年某个月份的文章"""
+        # 获取当前日期
+        today = datetime.now()
+        current_month = today.month
+        current_day = today.day
 
+        # 显示选择菜单
+        print(f"\n{'=' * 60}")
+        print("新京报爬虫 - 月份选择")
+        print(f"{'=' * 60}")
+        print(f"当前日期：{today.strftime('%Y年%m月%d日')}")
+        print("\n请选择要爬取的2025年月份：")
+
+        # 显示可选月份
+        for month in range(1, current_month + 1):
+            if month < current_month:
+                print(f"  {month:2d} - 2025年{month}月（全月）")
+            else:
+                print(f"  {month:2d} - 2025年{month}月（1日-{current_day}日）")
+
+        # 获取用户输入
+        while True:
+            try:
+                selected = input(f"\n请输入月份数字 (1-{current_month}): ").strip()
+                selected_month = int(selected)
+
+                if 1 <= selected_month <= current_month:
+                    break
+                else:
+                    print(f"请输入1到{current_month}之间的数字")
+            except ValueError:
+                print("请输入有效的数字")
+
+        # 确定日期范围
+        year = 2025
+        if selected_month < current_month:
+            # 爬取整个月
+            import calendar
+            last_day = calendar.monthrange(year, selected_month)[1]
+            start_day = 1
+            end_day = last_day
+        else:
+            # 爬取到当前日期
+            start_day = 1
+            end_day = current_day
+
+        logger.info(f"\n{'#' * 60}")
+        logger.info(f"开始爬取 {year}年{selected_month}月 的新京报")
+        logger.info(f"日期范围: {start_day}日 到 {end_day}日")
+        logger.info(f"注意：周六周日报纸不发行，将自动跳过")
+        logger.info(f"{'#' * 60}\n")
+
+        # 初始化
+        self._init_driver(headless=False)
+
+        total_saved = 0
+        total_skipped = 0
+        success_days = 0
+        weekend_days = 0
+        failed_dates = []
+        weekend_dates = []
+
+        # 按天爬取
+        for day in range(start_day, end_day + 1):
+            date_str = f"{year}{selected_month:02d}{day:02d}"
+
+            # 检查是否为周末
+            is_weekend_day, weekday_name = self.is_weekend(date_str)
+            if is_weekend_day:
+                logger.info(f"跳过 {date_str} ({weekday_name}，报纸不发行)")
+                weekend_days += 1
+                weekend_dates.append(f"{date_str}({weekday_name})")
+                continue
+
+            try:
+                # 爬取这天的所有版面
+                saved_count = self.crawl_date_with_click(date_str)
+
+                if saved_count >= 0:  # 即使没有新保存的文章，也算成功
+                    success_days += 1
+                    total_saved += saved_count
+                else:
+                    failed_dates.append(date_str)
+
+            except Exception as e:
+                logger.error(f"爬取日期 {date_str} 失败: {e}")
+                failed_dates.append(date_str)
+
+            time.sleep(2)
+
+        # 统计
+        logger.info(f"\n{'#' * 60}")
+        logger.info(f"爬取完成统计:")
+        logger.info(f"  - 月份：2025年{selected_month}月")
+        logger.info(f"  - 总天数: {end_day - start_day + 1}")
+        logger.info(f"  - 工作日: {end_day - start_day + 1 - weekend_days}")
+        logger.info(f"  - 周末天数: {weekend_days}")
+        logger.info(f"  - 成功爬取天数: {success_days}")
+        logger.info(f"  - 失败天数: {len(failed_dates)}")
+        if weekend_dates:
+            logger.info(f"  - 跳过的周末: {', '.join(weekend_dates[:5])}{'...' if len(weekend_dates) > 5 else ''}")
+        if failed_dates:
+            logger.info(f"  - 失败日期: {', '.join(failed_dates)}")
+        logger.info(f"  - 新保存文章数: {total_saved}")
+        if success_days > 0:
+            logger.info(f"  - 平均速度: {total_saved / success_days:.1f} 篇/天")
+        logger.info(f"{'#' * 60}\n")
+
+    def crawl_current_month(self):
+        """爬取当前月份从1号到今天的所有文章"""
         # 获取当前日期
         today = datetime.now()
         current_year = today.year
@@ -586,7 +727,7 @@ class BJNewsCrawler:
         logger.info(f"{'#' * 60}\n")
 
     def crawl_specific_date(self, date_str: str):
-        # 爬取特定日期（用于测试）
+        """爬取特定日期（用于测试）"""
         logger.info(f"\n测试爬取日期: {date_str}")
 
         # 检查是否为周末
@@ -607,7 +748,7 @@ class BJNewsCrawler:
             logger.error(f"失败: {e}")
 
     def crawl_date_range(self, start_date: str, end_date: str, skip_weekends: bool = True):
-        # 爬取指定日期范围内的所有报纸
+        """爬取指定日期范围内的所有报纸"""
         from datetime import timedelta
 
         start = datetime.strptime(start_date, "%Y%m%d")
@@ -682,19 +823,47 @@ def main():
     crawler = BJNewsCrawler(output_dir=output_directory)
 
     try:
-        # 多种使用方式示例：
+        # 显示主菜单
+        print(f"\n{'=' * 60}")
+        print("新京报爬虫系统")
+        print(f"{'=' * 60}")
+        print("请选择操作模式：")
+        print("  1 - 爬取2025年指定月份")
+        print("  2 - 爬取当前月份（到今天）")
+        print("  3 - 爬取特定日期（测试用）")
+        print("  4 - 爬取日期范围")
+        print(f"{'=' * 60}")
 
-        # 1. 爬取当前月份（自动跳过周末）
-        crawler.crawl_current_month()
+        choice = input("请输入选择 (1-4): ").strip()
 
-        # 2. 爬取特定日期（会提示是否为周末）
-        # crawler.crawl_specific_date("20250104")  # 周六
+        if choice == '1':
+            # 爬取指定月份
+            crawler.crawl_selected_month()
 
-        # 3. 爬取指定日期范围（自动跳过周末）
-        # crawler.crawl_date_range("20250101", "20250110", skip_weekends=True)
+        elif choice == '2':
+            # 爬取当前月份
+            crawler.crawl_current_month()
 
-        # 4. 爬取指定日期范围（包含周末，用于特殊情况）
-        # crawler.crawl_date_range("20250101", "20250110", skip_weekends=False)
+        elif choice == '3':
+            # 爬取特定日期
+            date_input = input("请输入日期 (格式: 20250115): ").strip()
+            if len(date_input) == 8 and date_input.isdigit():
+                crawler.crawl_specific_date(date_input)
+            else:
+                print("日期格式错误")
+
+        elif choice == '4':
+            # 爬取日期范围
+            start_input = input("请输入起始日期 (格式: 20250101): ").strip()
+            end_input = input("请输入结束日期 (格式: 20250110): ").strip()
+            skip = input("是否跳过周末？(y/n): ").strip().lower()
+
+            if len(start_input) == 8 and len(end_input) == 8:
+                crawler.crawl_date_range(start_input, end_input, skip_weekends=(skip != 'n'))
+            else:
+                print("日期格式错误")
+        else:
+            print("无效的选择")
 
     except KeyboardInterrupt:
         logger.info("\n用户中断")
