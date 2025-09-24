@@ -549,7 +549,7 @@ class BJNewsCrawler:
         return False, None
 
     def crawl_selected_month(self):
-        """让用户选择并爬取2025年某个月份的文章"""
+        # 让用户选择并爬取2025年某个月份的文章
         # 获取当前日期
         today = datetime.now()
         current_month = today.month
@@ -658,7 +658,7 @@ class BJNewsCrawler:
         logger.info(f"{'#' * 60}\n")
 
     def crawl_current_month(self):
-        """爬取当前月份从1号到今天的所有文章"""
+        # 爬取当前月份从1号到今天的所有文章
         # 获取当前日期
         today = datetime.now()
         current_year = today.year
@@ -727,7 +727,7 @@ class BJNewsCrawler:
         logger.info(f"{'#' * 60}\n")
 
     def crawl_specific_date(self, date_str: str):
-        """爬取特定日期（用于测试）"""
+        # 爬取特定日期（用于测试）
         logger.info(f"\n测试爬取日期: {date_str}")
 
         # 检查是否为周末
@@ -748,7 +748,7 @@ class BJNewsCrawler:
             logger.error(f"失败: {e}")
 
     def crawl_date_range(self, start_date: str, end_date: str, skip_weekends: bool = True):
-        """爬取指定日期范围内的所有报纸"""
+        # 爬取指定日期范围内的所有报纸
         from datetime import timedelta
 
         start = datetime.strptime(start_date, "%Y%m%d")
